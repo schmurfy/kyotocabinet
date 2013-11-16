@@ -14,6 +14,7 @@
 
 
 #include <kcpolydb.h>
+#include <arpa/inet.h>
 
 namespace kc = kyotocabinet;
 
