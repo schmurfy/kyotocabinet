@@ -124,6 +124,7 @@ static VALUE db_seize(VALUE vself, VALUE vkey);
 static VALUE db_set_bulk(int argc, VALUE* argv, VALUE vself);
 static VALUE db_remove_bulk(int argc, VALUE* argv, VALUE vself);
 static VALUE db_get_bulk(int argc, VALUE* argv, VALUE vself);
+static VALUE db_get_bulk_metrics(int argc, VALUE* argv, VALUE vself);
 static VALUE db_clear(VALUE vself);
 static VALUE db_synchronize(int argc, VALUE* argv, VALUE vself);
 static VALUE db_occupy(int argc, VALUE* argv, VALUE vself);
@@ -1999,6 +2000,7 @@ static void define_db() {
   rb_define_method(cls_db, "set_bulk", (METHOD)db_set_bulk, -1);
   rb_define_method(cls_db, "remove_bulk", (METHOD)db_remove_bulk, -1);
   rb_define_method(cls_db, "get_bulk", (METHOD)db_get_bulk, -1);
+  rb_define_method(cls_db, "get_bulk_metrics", (METHOD)db_get_bulk_metrics, -1);
   rb_define_method(cls_db, "clear", (METHOD)db_clear, 0);
   rb_define_method(cls_db, "synchronize", (METHOD)db_synchronize, -1);
   rb_define_method(cls_db, "occupy", (METHOD)db_occupy, -1);
@@ -3085,6 +3087,147 @@ static VALUE db_get_bulk(int argc, VALUE* argv, VALUE vself) {
     return Qnil;
   }
   return maptovhash(vself, &recs);
+}
+
+
+static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize)
+{
+  volatile VALUE vhash = rb_hash_new();
+  StringMap::const_iterator it = map->begin();
+  StringMap::const_iterator itend = map->end();
+  while (it != itend) {
+    // volatile VALUE vhash2 = rb_hash_new();
+    const uint8_t *p = (const uint8_t*)it->second.data();
+    const uint8_t *end = (const uint8_t*)(it->second.data() + it->second.size());
+    int pos = 0;
+    
+    // Box001001:pf_labels:voip:bytes_in:0:1383818400
+    const char *key = it->first.data();
+    const char *str_time = strrchr(key, ':');
+    time_t row_start_time;
+    struct tm *tm_timestamp;
+    
+    if( str_time == NULL ){
+      // invalid key
+      printf("invalid key: %s\n", key);
+      continue;
+    }
+    
+    row_start_time = atol(str_time + 1);
+    
+    volatile VALUE vkey = rb_str_new_ex(vdb, it->first.data(), it->first.size());
+    
+    while(p < end){
+      double value;
+      bool first_value = false;
+      VALUE voffset;
+      unsigned int time_offset;
+      
+      if( timepartsize == 1 ){
+        time_offset = *((uint8_t *)p);
+        
+      } else if( timepartsize == 2){
+        char buffer[30];
+        size_t len;
+        time_t timeoff;
+        uint16_t mask = 1 << (timepartsize*8 - 1);
+        
+        timeoff = ntohs(*((uint16_t *)p));
+        first_value = (timeoff & mask) > 0;
+        timeoff &= ~mask;
+        timeoff += row_start_time;
+        
+        tm_timestamp = gmtime(&timeoff);
+        len = strftime(buffer, sizeof(buffer) - 1, "%Y-%m-%dT%H:%M:%SZ", tm_timestamp);
+        voffset = rb_str_new(buffer, len);
+                
+      } else if( timepartsize == 4){
+        time_offset = *((uint32_t *)p);
+        
+      }
+      
+      
+      // printf("mask = %#x\n", ~(1 << (timepartsize*8 - 1)));
+      
+      p+= timepartsize;
+      
+      // now extract the double, assume little endian
+      ((uint8_t*)&value)[7] = p[0];
+      ((uint8_t*)&value)[6] = p[1];
+      ((uint8_t*)&value)[5] = p[2];
+      ((uint8_t*)&value)[4] = p[3];
+      ((uint8_t*)&value)[3] = p[4];
+      ((uint8_t*)&value)[2] = p[5];
+      ((uint8_t*)&value)[1] = p[6];
+      ((uint8_t*)&value)[0] = p[7];
+      
+      p+= 8;
+      
+      if( first_value ){
+        rb_hash_aset(vhash, voffset, rb_ary_new3(1, DBL2NUM(value)));
+      }
+      else {
+        rb_hash_aset(vhash, voffset, DBL2NUM(value));
+      }
+      
+    }
+    
+    // volatile VALUE vvalue = rb_str_new_ex(vdb, it->second.data(), it->second.size());
+    // rb_hash_aset(vhash, vkey, vhash2);
+    it++;
+  }
+  return vhash;
+}
+
+static VALUE db_get_bulk_metrics(int argc, VALUE* argv, VALUE vself) {
+  kc::PolyDB* db;
+  Data_Get_Struct(vself, kc::PolyDB, db);
+  volatile VALUE vkeys, vatomic, vtimepartsize;
+  rb_scan_args(argc, argv, "111", &vkeys, &vatomic, &vtimepartsize);
+  StringVector keys;
+  if (TYPE(vkeys) == T_ARRAY) {
+    int32_t knum = RARRAY_LEN(vkeys);
+    for (int32_t i = 0; i < knum; i++) {
+      volatile VALUE vkey = rb_ary_entry(vkeys, i);
+      vkey = StringValueEx(vkey);
+      keys.push_back(std::string(RSTRING_PTR(vkey), RSTRING_LEN(vkey)));
+    }
+  }
+  bool atomic = vatomic != Qfalse;
+  StringMap recs;
+  int64_t rv;
+  volatile VALUE vmutex = rb_ivar_get(vself, id_db_mutex);
+  if (vmutex == Qnil) {
+    class FuncImpl : public NativeFunction {
+     public:
+      explicit FuncImpl(kc::PolyDB* db, const StringVector* keys, StringMap* recs, bool atomic) :
+          db_(db), keys_(keys), recs_(recs), atomic_(atomic), rv_(0) {}
+      int64_t rv() {
+        return rv_;
+      }
+     private:
+      void operate() {
+        rv_ = db_->get_bulk(*keys_, recs_, atomic_);
+      }
+      kc::PolyDB* db_;
+      const StringVector* keys_;
+      StringMap* recs_;
+      bool atomic_;
+      int64_t rv_;
+    } func(db, &keys, &recs, atomic);
+    NativeFunction::execute(&func);
+    rv = func.rv();
+  } else {
+    rb_funcall(vmutex, id_mtx_lock, 0);
+    rv = db->get_bulk(keys, &recs, atomic);
+    rb_funcall(vmutex, id_mtx_unlock, 0);
+  }
+  if (rv < 0) {
+    db_raise(vself);
+    return Qnil;
+  }
+    
+  return maptovhash2(vself, &recs, FIX2INT(vtimepartsize));
 }
 
 
