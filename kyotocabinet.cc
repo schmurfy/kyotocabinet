@@ -3091,7 +3091,7 @@ static VALUE db_get_bulk(int argc, VALUE* argv, VALUE vself) {
 }
 
 
-static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize)
+static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize, time_t from, time_t to)
 {
   volatile VALUE vhash = rb_hash_new();
   StringMap::const_iterator it = map->begin();
@@ -3122,53 +3122,60 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize)
       double value;
       bool first_value = false;
       VALUE voffset;
-      unsigned int time_offset;
+      size_t len;
+      time_t timeoff;
+      char buffer[30];
       
       if( timepartsize == 1 ){
-        time_offset = *((uint8_t *)p);
+        uint8_t mask = 1 << (timepartsize*8 - 1);
+        first_value = (timeoff & mask) > 0;
+        timeoff = *((uint8_t *)p);
         
       } else if( timepartsize == 2){
-        char buffer[30];
-        size_t len;
-        time_t timeoff;
         uint16_t mask = 1 << (timepartsize*8 - 1);
         
         timeoff = ntohs(*((uint16_t *)p));
         first_value = (timeoff & mask) > 0;
         timeoff &= ~mask;
-        timeoff += row_start_time;
+                
+      } else if( timepartsize == 4){
+        uint32_t mask = 1 << (timepartsize*8 - 1);
+        first_value = (timeoff & mask) > 0;
+        timeoff = *((uint32_t *)p);
         
+      }
+      
+      timeoff += row_start_time;
+      
+      if( (timeoff >= from) || (timeoff <= to)  ){
+      
         tm_timestamp = gmtime(&timeoff);
         len = strftime(buffer, sizeof(buffer) - 1, "%Y-%m-%dT%H:%M:%SZ", tm_timestamp);
         voffset = rb_str_new(buffer, len);
-                
-      } else if( timepartsize == 4){
-        time_offset = *((uint32_t *)p);
         
-      }
-      
-      
-      // printf("mask = %#x\n", ~(1 << (timepartsize*8 - 1)));
-      
-      p+= timepartsize;
-      
-      // now extract the double, assume little endian
-      ((uint8_t*)&value)[7] = p[0];
-      ((uint8_t*)&value)[6] = p[1];
-      ((uint8_t*)&value)[5] = p[2];
-      ((uint8_t*)&value)[4] = p[3];
-      ((uint8_t*)&value)[3] = p[4];
-      ((uint8_t*)&value)[2] = p[5];
-      ((uint8_t*)&value)[1] = p[6];
-      ((uint8_t*)&value)[0] = p[7];
-      
-      p+= 8;
-      
-      if( first_value ){
-        rb_hash_aset(vhash, voffset, rb_ary_new3(1, DBL2NUM(value)));
-      }
-      else {
-        rb_hash_aset(vhash, voffset, DBL2NUM(value));
+        
+        // printf("mask = %#x\n", ~(1 << (timepartsize*8 - 1)));
+        
+        p+= timepartsize;
+        
+        // now extract the double, assume little endian
+        ((uint8_t*)&value)[7] = p[0];
+        ((uint8_t*)&value)[6] = p[1];
+        ((uint8_t*)&value)[5] = p[2];
+        ((uint8_t*)&value)[4] = p[3];
+        ((uint8_t*)&value)[3] = p[4];
+        ((uint8_t*)&value)[2] = p[5];
+        ((uint8_t*)&value)[1] = p[6];
+        ((uint8_t*)&value)[0] = p[7];
+        
+        p+= 8;
+        
+        if( first_value ){
+          rb_hash_aset(vhash, voffset, rb_ary_new3(1, DBL2NUM(value)));
+        }
+        else {
+          rb_hash_aset(vhash, voffset, DBL2NUM(value));
+        }
       }
       
     }
@@ -3183,8 +3190,8 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize)
 static VALUE db_get_bulk_metrics(int argc, VALUE* argv, VALUE vself) {
   kc::PolyDB* db;
   Data_Get_Struct(vself, kc::PolyDB, db);
-  volatile VALUE vkeys, vatomic, vtimepartsize;
-  rb_scan_args(argc, argv, "111", &vkeys, &vatomic, &vtimepartsize);
+  volatile VALUE vkeys, vtimepartsize, vfrom, vto;
+  rb_scan_args(argc, argv, "4", &vkeys, &vtimepartsize, &vfrom, &vto);
   StringVector keys;
   if (TYPE(vkeys) == T_ARRAY) {
     int32_t knum = RARRAY_LEN(vkeys);
@@ -3194,7 +3201,8 @@ static VALUE db_get_bulk_metrics(int argc, VALUE* argv, VALUE vself) {
       keys.push_back(std::string(RSTRING_PTR(vkey), RSTRING_LEN(vkey)));
     }
   }
-  bool atomic = vatomic != Qfalse;
+  // bool atomic = vatomic != Qfalse;
+  bool atomic = false;
   StringMap recs;
   int64_t rv;
   volatile VALUE vmutex = rb_ivar_get(vself, id_db_mutex);
@@ -3228,7 +3236,7 @@ static VALUE db_get_bulk_metrics(int argc, VALUE* argv, VALUE vself) {
     return Qnil;
   }
     
-  return maptovhash2(vself, &recs, FIX2INT(vtimepartsize));
+  return maptovhash2(vself, &recs, FIX2INT(vtimepartsize), FIX2INT(vfrom), FIX2INT(vto));
 }
 
 
