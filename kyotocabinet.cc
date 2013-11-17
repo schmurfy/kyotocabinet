@@ -3145,10 +3145,11 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize, time
         
       }
       
+      p+= timepartsize;
+      
       timeoff += row_start_time;
       
-      if( (timeoff >= from) || (timeoff <= to)  ){
-      
+      if( (timeoff >= from) && (timeoff <= to)  ){
         tm_timestamp = gmtime(&timeoff);
         len = strftime(buffer, sizeof(buffer) - 1, "%Y-%m-%dT%H:%M:%SZ", tm_timestamp);
         voffset = rb_str_new(buffer, len);
@@ -3156,7 +3157,6 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize, time
         
         // printf("mask = %#x\n", ~(1 << (timepartsize*8 - 1)));
         
-        p+= timepartsize;
         
         // now extract the double, assume little endian
         ((uint8_t*)&value)[7] = p[0];
@@ -3168,8 +3168,6 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize, time
         ((uint8_t*)&value)[1] = p[6];
         ((uint8_t*)&value)[0] = p[7];
         
-        p+= 8;
-        
         if( first_value ){
           rb_hash_aset(vhash, voffset, rb_ary_new3(1, DBL2NUM(value)));
         }
@@ -3178,6 +3176,7 @@ static VALUE maptovhash2(VALUE vdb, const StringMap* map, int timepartsize, time
         }
       }
       
+      p+= 8;
     }
     
     // volatile VALUE vvalue = rb_str_new_ex(vdb, it->second.data(), it->second.size());
