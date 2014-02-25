@@ -16,7 +16,7 @@ kcldflags = "-L/usr/local/lib" if(kcldflags.length < 1)
 kclibs = "-lkyotocabinet -lz -lstdc++ -lrt -lpthread -lm -lc" if(kclibs.length < 1)
 
 
-if RbConfig::CONFIG["CPP"] =~ /clang/ and RbConfig::CONFIG["build_os"] =~ /darwin12/
+if RbConfig::CONFIG["CPP"] =~ /clang/ and RbConfig::CONFIG["build_os"] =~ /darwin1/
   RbConfig::CONFIG["CPP"] = "g++ -E -std=c++11"
 else
   RbConfig::CONFIG["CPP"] = "g++ -E"
