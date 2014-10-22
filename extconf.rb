@@ -15,11 +15,12 @@ kccflags = "-I/usr/local/include" if(kccflags.length < 1)
 kcldflags = "-L/usr/local/lib" if(kcldflags.length < 1)
 kclibs = "-lkyotocabinet -lz -lstdc++ -lrt -lpthread -lm -lc" if(kclibs.length < 1)
 
-
-if RbConfig::CONFIG["CPP"] =~ /clang/ and RbConfig::CONFIG["build_os"] =~ /darwin1/
-  RbConfig::CONFIG["CPP"] = "g++ -E -std=c++11"
-else
+if RbConfig::CONFIG["CPP"] =~ /clang/
   RbConfig::CONFIG["CPP"] = "g++ -E"
+  case RbConfig::CONFIG["build_os"]
+  when /darwin12.[123]/i, /darwin1[10]/i
+    RbConfig::CONFIG["CPP"] = "g++ -E -std=c++11"
+  end
 end
 
 $CFLAGS = "-I. #{kccflags} -Wall #{$CFLAGS} -O2"
