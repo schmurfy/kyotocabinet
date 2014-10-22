@@ -15,8 +15,16 @@ kccflags = "-I/usr/local/include" if(kccflags.length < 1)
 kcldflags = "-L/usr/local/lib" if(kcldflags.length < 1)
 kclibs = "-lkyotocabinet -lz -lstdc++ -lrt -lpthread -lm -lc" if(kclibs.length < 1)
 
-Config::CONFIG["CPP"] = "g++ -E"
+if RbConfig::CONFIG["CPP"] =~ /clang/
+  RbConfig::CONFIG["CPP"] = "g++ -E"
+  case RbConfig::CONFIG["build_os"]
+  when /darwin12.[123]/i, /darwin1[10]/i
+    RbConfig::CONFIG["CPP"] = "g++ -E -std=c++11"
+  end
+end
+
 $CFLAGS = "-I. #{kccflags} -Wall #{$CFLAGS} -O2"
+$LDFLAGS = $LDFLAGS.sub(/\-L\/\S+/, '')
 $LDFLAGS = "#{$LDFLAGS} -L. #{kcldflags}"
 $libs = "#{$libs} #{kclibs}"
 
@@ -26,5 +34,6 @@ printf("  \$LDFLAGS = %s\n", $LDFLAGS)
 printf("  \$libs = %s\n", $libs)
 
 if have_header('kccommon.h')
+  $CPPFLAGS = "#{$CPPFLAGS} -std=c++11"
   create_makefile('kyotocabinet')
 end
